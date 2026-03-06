@@ -1,150 +1,188 @@
-#include <windows.h>
-#include <vector>
-#include <string>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <algorithm>
+#include <cmath>
+#include <string>
+#include <vector>
+#include <windows.h>
+#include <windowsx.h> // Wymagane dla GET_X_LPARAM i GET_Y_LPARAM
 
-// Struktura przechowująca dane o zapisanym prostokącie
-struct RectangleData {
-    HWND hwnd;
-};
-
-class RectApp {
+class AppRectangles {
+private:
     HINSTANCE m_instance;
-    HWND m_main_window;
-    HWND m_active_rect = nullptr;
-    std::vector<RectangleData> m_saved_rects;
-    POINT m_start_point = { 0, 0 };
+    HWND m_main;
     static std::wstring const s_class_name;
 
-public:
-    RectApp(HINSTANCE instance) : m_instance(instance), m_main_window(nullptr) {
-        register_class();
-        m_main_window = create_main_window();
-    }
+    // Pędzle do tła i prostokątów
+    HBRUSH m_bgBrush;
+    HBRUSH m_rectBrush;
 
-    // Rejestracja klasy okna - podobnie jak w notatkach [cite: 102-112]
+    // Stan rysowania i wektor uchwytów utworzonych prostokątów
+    std::vector<HWND> m_rects;
+    bool m_isDrawing = false;
+    int m_startX = 0;
+    int m_startY = 0;
+
     bool register_class() {
         WNDCLASSEXW desc{};
-        if (GetClassInfoExW(m_instance, s_class_name.c_str(), &desc) != 0) return true;
+        if (GetClassInfoExW(m_instance, s_class_name.c_str(), &desc) != 0)
+            return true;
 
-        desc = {
-            .cbSize = sizeof(WNDCLASSEXW),
-            .lpfnWndProc = window_proc_static,
-            .hInstance = m_instance,
-            .hCursor = LoadCursorW(nullptr, IDC_ARROW),
-            .hbrBackground = CreateSolidBrush(RGB(30, 50, 90)), // Kolor tła z treści zadania
-            .lpszClassName = s_class_name.c_str()
-        };
+        desc = { .cbSize = sizeof(WNDCLASSEXW),
+                .lpfnWndProc = window_proc_static,
+                .hInstance = m_instance,
+                .hCursor = LoadCursorW(nullptr, L"IDC_ARROW"),
+                .hbrBackground = m_bgBrush, // Tło głównego okna
+                .lpszClassName = s_class_name.c_str() };
         return RegisterClassExW(&desc) != 0;
     }
 
-    HWND create_main_window() {
-        return CreateWindowExW(
-            0, s_class_name.c_str(), L"Not WM_PAINT",
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
-            CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-            nullptr, nullptr, m_instance, this
-        );
+    HWND create_window() {
+        // Okno o stałym rozmiarze: bez WS_THICKFRAME (zmiana rozmiaru) i
+        // WS_MAXIMIZEBOX Używamy WS_CLIPCHILDREN aby zredukować migotanie przy
+        // zmianie rozmiaru dzieci
+        DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
+            WS_CLIPCHILDREN;
+
+        // Obliczamy rozmiar całego okna, tak aby obszar roboczy (client area)
+        // wynosił równo 800x600
+        RECT size{ 0, 0, 800, 600 };
+        AdjustWindowRectEx(&size, style, false, 0);
+
+        return CreateWindowExW(0, s_class_name.c_str(), L"Not WM_PAINT", style,
+            CW_USEDEFAULT, 0, size.right - size.left,
+            size.bottom - size.top, nullptr, nullptr, m_instance,
+            this);
     }
 
-    // Tworzenie prostokąta jako okna potomnego (static)
-    HWND create_rect_window(int x, int y, int w, int h, COLORREF color) {
-        HWND rect = CreateWindowExW(
-            0, L"STATIC", nullptr,
-            WS_CHILD | WS_VISIBLE,
-            x, y, w, h,
-            m_main_window, nullptr, m_instance, nullptr
-        );
-        
-        // Ustawienie koloru poprzez podesłanie pędzla w WM_CTLCOLORSTATIC (obsłużone w proc)
-        return rect;
+    static LRESULT CALLBACK window_proc_static(HWND window, UINT message,
+        WPARAM wparam, LPARAM lparam) {
+        AppRectangles* app = nullptr;
+        if (message == WM_NCCREATE) {
+            auto p = reinterpret_cast<LPCREATESTRUCTW>(lparam);
+            app = static_cast<AppRectangles*>(p->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        }
+        else {
+            app = reinterpret_cast<AppRectangles*>(
+                GetWindowLongPtrW(window, GWLP_USERDATA));
+        }
+
+        if (app != nullptr) {
+            return app->window_proc(window, message, wparam, lparam);
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    LRESULT window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_LBUTTONDOWN: {
+            m_isDrawing = true;
+
+            // Zapisujemy punkt początkowy (narożnik)
+            m_startX = GET_X_LPARAM(lparam);
+            m_startY = GET_Y_LPARAM(lparam);
+
+            // Tworzymy nowy prostokąt (statyczną kontrolkę) o zerowych wymiarach
+            HWND newRect = CreateWindowExW(
+                0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, m_startX, m_startY, 0,
+                0, window, nullptr, m_instance, nullptr);
+
+            m_rects.push_back(newRect);
+
+            // Przechwytujemy myszkę, aby śledzić ją nawet gdy opuści okno klienta
+            SetCapture(window);
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            if (m_isDrawing && !m_rects.empty()) {
+                int currentX = GET_X_LPARAM(lparam);
+                int currentY = GET_Y_LPARAM(lparam);
+
+                // Obliczanie położenia lewego górnego rogu oraz wymiarów
+                int x = std::min(m_startX, currentX);
+                int y = std::min(m_startY, currentY);
+                int w = std::abs(currentX - m_startX);
+                int h = std::abs(currentY - m_startY);
+
+                // Aktualizacja aktywnego prostokąta
+                SetWindowPos(m_rects.back(), nullptr, x, y, w, h,
+                    SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            if (m_isDrawing) {
+                m_isDrawing = false;
+                ReleaseCapture(); // Koniec śledzenia myszki
+            }
+            return 0;
+        }
+        case WM_KEYDOWN: {
+            if (wparam == VK_BACK) {
+                if (!m_rects.empty()) {
+                    // Niszczymy uchwyt ostatniego okienka-prostokąta
+                    DestroyWindow(m_rects.back());
+                    m_rects.pop_back();
+
+                    // W przypadku, gdy użytkownik usunął w trakcie rysowania
+                    if (m_isDrawing) {
+                        m_isDrawing = false;
+                        ReleaseCapture();
+                    }
+
+                    // Odświeżenie okna matki, aby usunąć wizualne pozostałości
+                    InvalidateRect(window, nullptr, TRUE);
+                }
+            }
+            return 0;
+        }
+        case WM_CTLCOLORSTATIC: {
+            // Ta wiadomość pozwala nam zmienić kolor statycznej kontrolki
+            // (prostokąta)
+            return reinterpret_cast<INT_PTR>(m_rectBrush);
+        }
+        case WM_DESTROY: {
+            PostQuitMessage(EXIT_SUCCESS);
+            return 0;
+        }
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+public:
+    AppRectangles(HINSTANCE instance) : m_instance{ instance }, m_main{} {
+        // Zgodnie z zadaniem tworzymy unikalne kolory
+        m_bgBrush = CreateSolidBrush(RGB(30, 50, 90));
+        m_rectBrush = CreateSolidBrush(RGB(170, 70, 80));
+
+        register_class();
+        m_main = create_window();
+    }
+
+    ~AppRectangles() {
+        // Należy pamiętać o zarządzaniu zasobami i zwolnieniu pędzli
+        DeleteObject(m_bgBrush);
+        DeleteObject(m_rectBrush);
     }
 
     int run(int show_command) {
-        ShowWindow(m_main_window, show_command);
+        ShowWindow(m_main, show_command);
         MSG msg{};
-        while (GetMessageW(&msg, nullptr, 0, 0)) {
+        BOOL result = TRUE;
+        while ((result = GetMessageW(&msg, nullptr, 0, 0)) != 0) {
+            if (result == -1)
+                return EXIT_FAILURE;
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        return (int)msg.wParam;
-    }
-
-private:
-    static LRESULT CALLBACK window_proc_static(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
-        RectApp* app = nullptr;
-        if (msg == WM_NCCREATE) {
-            app = static_cast<RectApp*>(reinterpret_cast<LPCREATESTRUCT>(lp)->lpCreateParams);
-            SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
-        } else {
-            app = reinterpret_cast<RectApp*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
-        }
-        return app ? app->window_proc(hWnd, msg, wp, lp) : DefWindowProcW(hWnd, msg, wp, lp);
-    }
-
-    LRESULT window_proc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
-        switch (msg) {
-        case WM_LBUTTONDOWN: {
-            m_start_point.x = (short)LOWORD(lp);
-            m_start_point.y = (short)HIWORD(lp);
-            
-            // Tworzymy "aktywny" prostokąt o rozmiarze 0x0
-            m_active_rect = create_rect_window(m_start_point.x, m_start_point.y, 0, 0, RGB(170, 70, 80));
-            SetCapture(hWnd); // Przechwytujemy mysz
-            return 0;
-        }
-
-        case WM_MOUSEMOVE: {
-            if (m_active_rect) {
-                int curr_x = (short)LOWORD(lp);
-                int curr_y = (short)HIWORD(lp);
-
-                // Obliczanie wymiarów (obsługa przeciągania w dowolną stronę)
-                int x = std::min((int)m_start_point.x, curr_x);
-                int y = std::min((int)m_start_point.y, curr_y);
-                int w = std::abs(curr_x - (int)m_start_point.x);
-                int h = std::abs(curr_y - (int)m_start_point.y);
-
-                SetWindowPos(m_active_rect, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
-            }
-            return 0;
-        }
-
-        case WM_LBUTTONUP: {
-            if (m_active_rect) {
-                m_saved_rects.push_back({ m_active_rect });
-                m_active_rect = nullptr;
-                ReleaseCapture();
-            }
-            return 0;
-        }
-
-        case WM_KEYDOWN: {
-            if (wp == VK_BACK && !m_saved_rects.empty()) {
-                // Usuwanie ostatniego prostokąta
-                DestroyWindow(m_saved_rects.back().hwnd);
-                m_saved_rects.pop_back();
-                // Wymuszenie odświeżenia tła zgodnie z instrukcją
-                InvalidateRect(hWnd, nullptr, TRUE);
-            }
-            return 0;
-        }
-
-        case WM_CTLCOLORSTATIC: {
-            // Każdy prostokąt (klasa STATIC) dostaje ten kolor
-            static HBRUSH rectBrush = CreateSolidBrush(RGB(170, 70, 80));
-            return (LRESULT)rectBrush;
-        }
-
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
-        }
-        return DefWindowProcW(hWnd, msg, wp, lp);
+        return EXIT_SUCCESS;
     }
 };
 
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nShow) {
-    RectApp app(hInst);
-    return app.run(nShow);
+std::wstring const AppRectangles::s_class_name{ L"Not_WM_PAINT_Class" };
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show_command) {
+    AppRectangles app{ instance };
+    return app.run(show_command);
 }
