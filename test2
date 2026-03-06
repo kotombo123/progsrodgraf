@@ -1,0 +1,98 @@
+#define WIN32_LEAN_AND_MEAN
+#include <string>
+#include <windows.h>
+
+class AppSquare {
+private:
+    HINSTANCE m_instance;
+    HWND m_main;
+    HWND m_square; // Nasz czerwony kwadrat
+    static std::wstring const s_class_name;
+
+    // Pozycja i rozmiar kwadratu
+    int m_posX = 50;
+    int m_posY = 50;
+    const int m_size = 50;
+    const int m_speed = 15; // O ile pikseli przesuwa się kwadrat
+
+    bool register_class() {
+        WNDCLASSEXW desc{};
+        desc.cbSize = sizeof(WNDCLASSEXW);
+        desc.lpfnWndProc = window_proc_static;
+        desc.hInstance = m_instance;
+        desc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
+        desc.hbrBackground = CreateSolidBrush(RGB(30, 30, 30)); // Ciemne tło
+        desc.lpszClassName = s_class_name.c_str();
+        return RegisterClassExW(&desc) != 0;
+    }
+
+    static LRESULT CALLBACK window_proc_static(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+        AppSquare* app = nullptr;
+        if (message == WM_NCCREATE) {
+            auto p = reinterpret_cast<LPCREATESTRUCTW>(lparam);
+            app = static_cast<AppSquare*>(p->lpCreateParams);
+            SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        } else {
+            app = reinterpret_cast<AppSquare*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        }
+        return (app) ? app->window_proc(window, message, wparam, lparam) : DefWindowProcW(window, message, wparam, lparam);
+    }
+
+    LRESULT window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+        switch (message) {
+        case WM_CREATE: {
+            // Tworzymy czerwony kwadrat jako kontrolkę STATIC
+            m_square = CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE,
+                                     m_posX, m_posY, m_size, m_size, window, nullptr, m_instance, nullptr);
+            return 0;
+        }
+        case WM_KEYDOWN: {
+            switch (wparam) {
+                case 'W': m_posY -= m_speed; break;
+                case 'S': m_posY += m_speed; break;
+                case 'A': m_posX -= m_speed; break;
+                case 'D': m_posX += m_speed; break;
+            }
+            
+            // Aktualizacja pozycji kwadratu na ekranie
+            SetWindowPos(m_square, nullptr, m_posX, m_posY, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+            return 0;
+        }
+        case WM_CTLCOLORSTATIC: {
+            // Ustawiamy kolor kwadratu na czerwony
+            static HBRUSH redBrush = CreateSolidBrush(RGB(255, 0, 0));
+            return reinterpret_cast<INT_PTR>(redBrush);
+        }
+        case WM_DESTROY: {
+            PostQuitMessage(0);
+            return 0;
+        }
+        }
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+
+public:
+    AppSquare(HINSTANCE instance) : m_instance{ instance }, m_main{}, m_square{} {
+        register_class();
+        m_main = CreateWindowExW(0, s_class_name.c_str(), L"WSAD Square", 
+                               WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 
+                               800, 600, nullptr, nullptr, m_instance, this);
+    }
+
+    int run(int show_command) {
+        ShowWindow(m_main, show_command);
+        MSG msg{};
+        while (GetMessageW(&msg, nullptr, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        return (int)msg.wParam;
+    }
+};
+
+std::wstring const AppSquare::s_class_name{ L"WSAD_Square_Class" };
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show_command) {
+    AppSquare app{ instance };
+    return app.run(show_command);
+}
