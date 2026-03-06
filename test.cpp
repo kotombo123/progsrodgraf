@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 #include <windows.h>
-#include <windowsx.h> // Wymagane dla GET_X_LPARAM i GET_Y_LPARAM
+#include <windowsx.h>
 
 class AppRectangles {
 private:
@@ -13,11 +13,9 @@ private:
     HWND m_main;
     static std::wstring const s_class_name;
 
-    // Pędzle do tła i prostokątów
     HBRUSH m_bgBrush;
     HBRUSH m_rectBrush;
 
-    // Stan rysowania i wektor uchwytów utworzonych prostokątów
     std::vector<HWND> m_rects;
     bool m_isDrawing = false;
     int m_startX = 0;
@@ -31,25 +29,19 @@ private:
         desc = { .cbSize = sizeof(WNDCLASSEXW),
                 .lpfnWndProc = window_proc_static,
                 .hInstance = m_instance,
-                .hCursor = LoadCursorW(nullptr, L"IDC_ARROW"),
-                .hbrBackground = m_bgBrush, // Tło głównego okna
+                .hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW),
+                .hbrBackground = m_bgBrush,
                 .lpszClassName = s_class_name.c_str() };
         return RegisterClassExW(&desc) != 0;
     }
 
     HWND create_window() {
-        // Okno o stałym rozmiarze: bez WS_THICKFRAME (zmiana rozmiaru) i
-        // WS_MAXIMIZEBOX Używamy WS_CLIPCHILDREN aby zredukować migotanie przy
-        // zmianie rozmiaru dzieci
-        DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
-            WS_CLIPCHILDREN;
+        DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
 
-        // Obliczamy rozmiar całego okna, tak aby obszar roboczy (client area)
-        // wynosił równo 800x600
         RECT size{ 0, 0, 800, 600 };
         AdjustWindowRectEx(&size, style, false, 0);
 
-        return CreateWindowExW(0, s_class_name.c_str(), L"Not WM_PAINT", style,
+        return CreateWindowExW(0, s_class_name.c_str(), L"Escape to Undo", style,
             CW_USEDEFAULT, 0, size.right - size.left,
             size.bottom - size.top, nullptr, nullptr, m_instance,
             this);
@@ -78,19 +70,14 @@ private:
         switch (message) {
         case WM_LBUTTONDOWN: {
             m_isDrawing = true;
-
-            // Zapisujemy punkt początkowy (narożnik)
             m_startX = GET_X_LPARAM(lparam);
             m_startY = GET_Y_LPARAM(lparam);
 
-            // Tworzymy nowy prostokąt (statyczną kontrolkę) o zerowych wymiarach
             HWND newRect = CreateWindowExW(
                 0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, m_startX, m_startY, 0,
                 0, window, nullptr, m_instance, nullptr);
 
             m_rects.push_back(newRect);
-
-            // Przechwytujemy myszkę, aby śledzić ją nawet gdy opuści okno klienta
             SetCapture(window);
             return 0;
         }
@@ -99,13 +86,14 @@ private:
                 int currentX = GET_X_LPARAM(lparam);
                 int currentY = GET_Y_LPARAM(lparam);
 
-                // Obliczanie położenia lewego górnego rogu oraz wymiarów
-                int x = std::min(m_startX, currentX);
-                int y = std::min(m_startY, currentY);
-                int w = std::abs(currentX - m_startX);
-                int h = std::abs(currentY - m_startY);
+                // Zastępujemy std::min: wybieramy mniejszą wartość
+                int x = (m_startX < currentX) ? m_startX : currentX;
+                int y = (m_startY < currentY) ? m_startY : currentY;
 
-                // Aktualizacja aktywnego prostokąta
+                // Zastępujemy std::abs: odejmujemy mniejszą od większej
+                int w = (currentX > m_startX) ? (currentX - m_startX) : (m_startX - currentX);
+                int h = (currentY > m_startY) ? (currentY - m_startY) : (m_startY - currentY);
+
                 SetWindowPos(m_rects.back(), nullptr, x, y, w, h,
                     SWP_NOZORDER | SWP_NOACTIVATE);
             }
@@ -114,36 +102,30 @@ private:
         case WM_LBUTTONUP: {
             if (m_isDrawing) {
                 m_isDrawing = false;
-                ReleaseCapture(); // Koniec śledzenia myszki
+                ReleaseCapture();
             }
             return 0;
         }
         case WM_KEYDOWN: {
-            if (wparam == VK_BACK) {
+            if (wparam == VK_ESCAPE) { // Cofanie przez Escape
                 if (!m_rects.empty()) {
-                    // Niszczymy uchwyt ostatniego okienka-prostokąta
                     DestroyWindow(m_rects.back());
                     m_rects.pop_back();
 
-                    // W przypadku, gdy użytkownik usunął w trakcie rysowania
                     if (m_isDrawing) {
                         m_isDrawing = false;
                         ReleaseCapture();
                     }
-
-                    // Odświeżenie okna matki, aby usunąć wizualne pozostałości
                     InvalidateRect(window, nullptr, TRUE);
                 }
             }
             return 0;
         }
         case WM_CTLCOLORSTATIC: {
-            // Ta wiadomość pozwala nam zmienić kolor statycznej kontrolki
-            // (prostokąta)
             return reinterpret_cast<INT_PTR>(m_rectBrush);
         }
         case WM_DESTROY: {
-            PostQuitMessage(EXIT_SUCCESS);
+            PostQuitMessage(0);
             return 0;
         }
         }
@@ -152,7 +134,6 @@ private:
 
 public:
     AppRectangles(HINSTANCE instance) : m_instance{ instance }, m_main{} {
-        // Zgodnie z zadaniem tworzymy unikalne kolory
         m_bgBrush = CreateSolidBrush(RGB(30, 50, 90));
         m_rectBrush = CreateSolidBrush(RGB(170, 70, 80));
 
@@ -161,7 +142,6 @@ public:
     }
 
     ~AppRectangles() {
-        // Należy pamiętać o zarządzaniu zasobami i zwolnieniu pędzli
         DeleteObject(m_bgBrush);
         DeleteObject(m_rectBrush);
     }
@@ -169,14 +149,11 @@ public:
     int run(int show_command) {
         ShowWindow(m_main, show_command);
         MSG msg{};
-        BOOL result = TRUE;
-        while ((result = GetMessageW(&msg, nullptr, 0, 0)) != 0) {
-            if (result == -1)
-                return EXIT_FAILURE;
+        while (GetMessageW(&msg, nullptr, 0, 0)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        return EXIT_SUCCESS;
+        return (int)msg.wParam;
     }
 };
 
