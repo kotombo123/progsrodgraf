@@ -46,7 +46,10 @@ Win32GradientApp::~Win32GradientApp() {
     DestroyIcon(app_icon_);
 }
 
-// Procedura przywrocenia domyslnych markerow
+// Resetuje stan aplikacji do domyślnego.
+// Ustawia domyślne punkty gradientu (od czarnego do białego),
+// resetuje pozycję wektorów początkowego i końcowego,
+// a następnie wymusza ponowne narysowanie okien.
 void Win32GradientApp::DefSetup() {
   nodes_ = {{0.0f, RGB(0, 0, 0)}, {1.0f, RGB(255, 255, 255)}};
   vecA_ = {100, 100};
@@ -58,8 +61,9 @@ void Win32GradientApp::DefSetup() {
   }
 }
 
-// Rekonstrukcja wektora przedobliczonych kolorow dla zwiekszenia predkosci
-// renderingu
+// Renderuje tablicę (tzw. Lookup Table) 1024 kolorów dla szybkiego dostępu.
+// Mapuje i interpoluje kolory z utworzonych punktów kontrolnych (odcinkami).
+// Szybko udostępnia odcienie dla pętli, eliminując potrzebę liczenia kolorów co piksel.
 void Win32GradientApp::BuildLookupSequence() {
   lut_cache_.resize(1024);
   std::vector<GradPoint> proxy = nodes_;
@@ -141,7 +145,8 @@ HWND Win32GradientApp::SpawnMainFrame() {
   return mw;
 }
 
-// Przygotowanie gornego menu akcji i przylepienie do okna
+// Tworzy i konfiguruje główne menu aplikacji, zawierające opcje pliku i edycji.
+// Rejestruje także skróty klawiszowe (akceleratory) dla szybkiego dostępu.
 void Win32GradientApp::SetupMenu() {
   HMENU bMenu = CreateMenu();
   HMENU cFile = CreatePopupMenu();
@@ -167,7 +172,9 @@ void Win32GradientApp::SetupMenu() {
   accel_keys_ = CreateAcceleratorTableW(map, 6);
 }
 
-// Wypuszczenie bitmapy do pamieci plikowej jako 32bit raw pixels
+// Zapisuje aktualny widok płótna gradientu do pliku BMP.
+// Oblicza wymiary rysunku, generuje nagłówki pliku bitmapy (BITMAPFILEHEADER i BITMAPINFOHEADER),
+// a następnie kopiuje surowe piksele 32-bit z pamięci na dysk.
 void Win32GradientApp::DumpBitmap() {
   if (canvas_mem_.empty())
     return;
@@ -208,7 +215,8 @@ void Win32GradientApp::DumpBitmap() {
   fs.write(reinterpret_cast<char *>(canvas_mem_.data()), cw * ch * 4);
 }
 
-// Zrzucanie kordynat do pliku CSV
+// Eksportuje zdefiniowane przez użytkownika węzły kolorów do pliku tekstowego CSV.
+// Konwertuje proporcje i kolory punktów do formatu (pozycja,#RRGGBB).
 void Win32GradientApp::ExportToCSV() {
   wchar_t p_out[MAX_PATH] = L"saved.csv";
   OPENFILENAMEW fw = {sizeof(OPENFILENAMEW)};
@@ -235,7 +243,8 @@ void Win32GradientApp::ExportToCSV() {
   }
 }
 
-// Podnoszenie struktury wektorowej z formatu tekstowego
+// Wczytuje format (pozycja,#RRGGBB) z pliku CSV by przywrócić zapisaną listę węzłów.
+// Parsuje tekst liniami załatać braki i wymusza ponowne zbudowanie tablicy na płótnie.
 void Win32GradientApp::ImportFromCSV() {
   wchar_t p_in[MAX_PATH] = L"";
   OPENFILENAMEW fw = {sizeof(OPENFILENAMEW)};
@@ -442,8 +451,9 @@ LRESULT Win32GradientApp::ProcessMain(HWND hw, UINT code, WPARAM wP,
   return DefWindowProcW(hw, code, wP, lP);
 }
 
-// Procedura glowna renderujaca w pamieci - zapis za pomoca formuly
-// matematycznej
+// Główna procedura operująca surowymi pikselami w kanwie, rysująca sam gradient.
+// Używa interpolacji liniowej lub wektorowego dystansu (dla trybu radialnego), upewniając się 
+// że korzysta w locie z LookUp Table dla każdego elementu siatki (skrzydeł dwubiegunowych).
 void Win32GradientApp::PaintSpectrum(HDC ctx, const RECT &area) {
   int dx = area.right - area.left, dy = area.bottom - area.top;
   if (dx <= 0 || dy <= 0)
@@ -482,8 +492,8 @@ void Win32GradientApp::PaintSpectrum(HDC ctx, const RECT &area) {
                     canvas_mem_.data(), &_meta, DIB_RGB_COLORS);
 }
 
-// Rysowanie uchwytow kontrolnych okna (biale+czarne kolka z zolta otoczka przy
-// nacisku)
+// Wyrysowuje interaktywne uchwyty punktów kontrolnych Start i End za pomocą GDI.
+// Tworzy estetyczne kółka uwzględniając różne warunki hover i drag dla lepszej widoczności kanwy.
 void Win32GradientApp::PaintAnchors(HDC ctx) {
   auto pin_point = [&](POINT _v, bool _hov) {
     HPEN op = CreatePen(PS_SOLID, _hov ? 3 : 2, RGB(255, 255, 255));
@@ -518,6 +528,8 @@ LRESULT Win32GradientApp::CbTrack(HWND hw, UINT type, WPARAM wP, LPARAM lP) {
              : DefWindowProcW(hw, type, wP, lP);
 }
 
+// Aktywuje okno modalne dialogu GIMP Color Picker'a.
+// Pobiera referencyjny piksel do zmiany, wstrzymuje wątek a na zmianę wymusza przebudowę (Invalidate) podglądu.
 void Win32GradientApp::ActivateColorDlg(int nodeSz) {
   GimpColorTool tPicker;
   if (tPicker.RunModal(module_handle_, wnd_app_, nodes_[nodeSz].rgba)) {
@@ -527,6 +539,8 @@ void Win32GradientApp::ActivateColorDlg(int nodeSz) {
   }
 }
 
+// Rysuje cały dolny pasek kontrolny gradientu przy zdarzeniu wywołanym przez WinAPI MSG.
+// Używa Double Bufferingu do naniesienia pomniejszonej wersji gradientu oraz interaktywnych znaczników i trójkątów.
 void Win32GradientApp::OnTrackPaint(HWND hwnd) {
   PAINTSTRUCT pi;
   HDC drw = BeginPaint(hwnd, &pi);
@@ -580,6 +594,8 @@ void Win32GradientApp::OnTrackPaint(HWND hwnd) {
   EndPaint(hwnd, &pi);
 }
 
+// Centralna jednostka obsługująca mysz na dolnym pasku kontrolnym.
+// Dekoduje kliknięcia (nowe punkty), śledzenie ruchu, czy zwalnianie CaptureHwnd (usunięcie punktów).
 void Win32GradientApp::OnTrackMouse(HWND hwnd, UINT msType, WPARAM wP,
                                     LPARAM lP) {
   int posX = GET_X_LPARAM(lP);
@@ -690,7 +706,8 @@ enum {
   BTN_DECL
 };
 
-// Algorytm transformacji matryc rgb do formatu hsv
+// Algorytm transformacji przestrzeni barw z klasycznego RGB na składowe formatu HSV (Hue, Saturation, Value).
+// Dokonuje podziału by poprawie ulokować kolor na kole dialogowym Color Pickera.
 void GimpColorTool::CvtRGB2HSV(int r, int g, int b, float &th, float &ts,
                                float &tv) {
   float rd = r / 255.0f, gd = g / 255.0f, bd = b / 255.0f;
@@ -711,7 +728,8 @@ void GimpColorTool::CvtRGB2HSV(int r, int g, int b, float &th, float &ts,
     th += 360.0f;
 }
 
-// Odwrocenie formatu powrotnego
+// Wykonuje konwersję odwrotną - mapuje ułamkową przestrzeń HSV bezpośrednio na kanały RGB Win32.
+// Interpoluje kolory w sześciu skali wektora obrębu kątów odcienia (skali 360).
 void GimpColorTool::CvtHSV2RGB(float th, float ts, float tv, int &r, int &g,
                                int &b) {
   float chroma = tv * ts;
@@ -797,20 +815,19 @@ bool GimpColorTool::RunModal(HINSTANCE inst, HWND hParent, COLORREF &io_rgb) {
     RegisterClassExW(&wca);
   }
 
+  EnableWindow(hParent, FALSE);
+
   wnd_self_ = CreateWindowExW(
       WS_EX_DLGMODALFRAME, L"DlgCbx32", L"GIMP Color Picker",
       WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE, CW_USEDEFAULT,
-      CW_USEDEFAULT, 650, 420, hParent, nullptr, inst, this);
+      CW_USEDEFAULT, 690, 420, hParent, nullptr, inst, this);
 
   hook_ptr_ =
       SetWindowsHookExW(WH_MOUSE_LL, GrabHook, GetModuleHandle(NULL), 0);
 
-  EnableWindow(hParent, FALSE);
-  ShowWindow(wnd_self_, SW_SHOW);
   SetActiveWindow(wnd_self_);
   SetForegroundWindow(wnd_self_);
   SetFocus(wnd_self_);
-  UpdateWindow(wnd_self_);
 
   MSG spin;
   bool pass = false;
@@ -822,8 +839,10 @@ bool GimpColorTool::RunModal(HINSTANCE inst, HWND hParent, COLORREF &io_rgb) {
     if (spin.message == WM_KEYDOWN && spin.wParam == VK_ESCAPE) {
       break;
     }
-    TranslateMessage(&spin);
-    DispatchMessageW(&spin);
+    if (!IsDialogMessage(wnd_self_, &spin)) {
+      TranslateMessage(&spin);
+      DispatchMessageW(&spin);
+    }
   }
 
   if (hook_ptr_)
@@ -831,13 +850,16 @@ bool GimpColorTool::RunModal(HINSTANCE inst, HWND hParent, COLORREF &io_rgb) {
   hook_ptr_ = nullptr;
   inst_active_ = nullptr;
   EnableWindow(hParent, TRUE);
+  SetActiveWindow(hParent);
+  SetForegroundWindow(hParent);
   DestroyWindow(wnd_self_);
   if (pass)
     io_rgb = curr_color_;
   return pass;
 }
 
-// Przerysowanie wezlow do interfejsu (Cache)
+// Tworzy rzut szaty graficznej "kółka i trójkąta" w okienku Color Pickera używając matematycznego renderowania trójkąta.
+// Wykorzystuje współrzędne barycentryczne trójkąta dla precyzyjnego mapowania koordynat S/V w obrębie danego Hue.
 void GimpColorTool::DrawGraphic(HDC mem) {
   int bw = 320, bh = 350;
   DWORD null_col = GetSysColor(COLOR_BTNFACE);
@@ -968,24 +990,24 @@ LRESULT GimpColorTool::MsgHandler(HWND hw, UINT uM, WPARAM wP, LPARAM lP) {
       CreateWindowExW(0, L"STATIC", tags[i], WS_CHILD | WS_VISIBLE, oX,
                        oY + i * step, 20, 20, hw, nullptr, nullptr, nullptr);
       HWND trg = CreateWindowExW(0, TRACKBAR_CLASSW, nullptr,
-                                 WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS, oX + 20,
+                                 WS_CHILD | WS_VISIBLE | TBS_AUTOTICKS | WS_TABSTOP, oX + 20,
                                  oY + i * step - 5, 200, 30, hw,
                                  (HMENU)(INT_PTR)(UI_H + i), nullptr, nullptr);
       SendMessage(trg, TBM_SETRANGE, TRUE, MAKELPARAM(0, ceilData[i]));
       edit_ctrls_[i] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"0",
-                                       WS_CHILD | WS_VISIBLE | ES_NUMBER,
+                                       WS_CHILD | WS_VISIBLE | ES_NUMBER | WS_TABSTOP,
                                        oX + 225, oY + i * step - 3, 40, 24, hw,
                                        (HMENU)(INT_PTR)(UI_H + 10 + i), nullptr, nullptr);
     }
 
-    CreateWindowExW(0, L"BUTTON", L"Pipette (Screen)", WS_CHILD | WS_VISIBLE,
+    CreateWindowExW(0, L"BUTTON", L"Pipette (Screen)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                     oX, 270, 120, 30, hw, (HMENU)BTN_PIP, nullptr, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Reset to Old", WS_CHILD | WS_VISIBLE,
+    CreateWindowExW(0, L"BUTTON", L"Reset to Old", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                     oX + 130, 270, 100, 30, hw, (HMENU)BTN_RST, nullptr,
                     nullptr);
-    CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE, oX, 330, 100,
+    CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, oX, 330, 100,
                     35, hw, (HMENU)BTN_ACPT, nullptr, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, oX + 110,
+    CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP, oX + 110,
                     330, 100, 35, hw, (HMENU)BTN_DECL, nullptr, nullptr);
     SyncScales();
     return 0;
@@ -1005,7 +1027,7 @@ LRESULT GimpColorTool::MsgHandler(HWND hw, UINT uM, WPARAM wP, LPARAM lP) {
     DrawGraphic(pOff);
 
     SetBkMode(pOff, TRANSPARENT);
-    RECT rxn = {560, 20, 610, 130}, rxo = {560, 130, 610, 240};
+    RECT rxn = {610, 20, 660, 130}, rxo = {610, 130, 660, 240};
     HBRUSH brN = CreateSolidBrush(curr_color_);
     FillRect(pOff, &rxn, brN);
     DeleteObject(brN);
@@ -1013,8 +1035,8 @@ LRESULT GimpColorTool::MsgHandler(HWND hw, UINT uM, WPARAM wP, LPARAM lP) {
     FillRect(pOff, &rxo, brO);
     DeleteObject(brO);
 
-    TextOutW(pOff, 565, 25, L"New", 3);
-    TextOutW(pOff, 565, 135, L"Old", 3);
+    TextOutW(pOff, 615, 25, L"New", 3);
+    TextOutW(pOff, 615, 135, L"Old", 3);
     BitBlt(drawDev, 0, 0, rcd.right, rcd.bottom, pOff, 0, 0, SRCCOPY);
     DeleteObject(mapBmp);
     DeleteDC(pOff);
